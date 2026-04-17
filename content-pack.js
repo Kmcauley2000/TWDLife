@@ -147,4 +147,146 @@
     BLDS.infirmary.am.push('Someone boils water over a camping stove.','A shelf of scavenged painkillers sits under lock.');
   }
 
+  // ---------------------------------------------------------------------------
+  // Make core cast/places feel rare and discovered over time
+  // ---------------------------------------------------------------------------
+  const CANON_MALE = ["Rick","Daryl","Glenn","Shane","Tyreese","Abraham","Eugene","Aaron","Jesus","Merle","Hershel","Morgan","Negan","Ezekiel","Gabriel","Dwight"];
+  const CANON_FEMALE = ["Maggie","Carol","Michonne","Andrea","Beth","Sasha","Rosita","Tara","Lydia","Connie","Princess","Lori","Judith","Alpha"];
+
+  function stripFrequentCanonNames(){
+    if(Array.isArray(FM)){
+      for(let i=FM.length-1;i>=0;i--){if(CANON_MALE.includes(FM[i]))FM.splice(i,1)}
+    }
+    if(Array.isArray(FF)){
+      for(let i=FF.length-1;i>=0;i--){if(CANON_FEMALE.includes(FF[i]))FF.splice(i,1)}
+    }
+  }
+  stripFrequentCanonNames();
+
+  const oldMkNPC = (typeof mkNPC==='function') ? mkNPC : null;
+  if(oldMkNPC){
+    window.mkNPC = function patchedMkNPC(forceM){
+      const day = (typeof S!=='undefined' && S?.days) ? S.days : 1;
+      if(typeof S!=='undefined' && !Array.isArray(S.legendaryMet)) S.legendaryMet=[];
+
+      // Canon survivors become possible later, and still remain uncommon.
+      const canonChance = day<20 ? 0.00 : day<40 ? 0.02 : day<70 ? 0.04 : day<120 ? 0.07 : 0.10;
+      if(Math.random()<canonChance){
+        const male = forceM!==undefined ? !!forceM : Math.random()<0.55;
+        const pool = (male?CANON_MALE:CANON_FEMALE).filter(n=>!(S?.legendaryMet||[]).includes(n));
+        if(pool.length){
+          const fn = pool[Math.floor(Math.random()*pool.length)];
+          if(typeof S!=='undefined') S.legendaryMet.push(fn);
+          return {name:fn+' '+rndA(LN),role:rndA(ROLES),male,age:rnd(22,55),legendary:1};
+        }
+      }
+      return oldMkNPC(forceM);
+    }
+  }
+
+  const LEGENDARY_UNLOCK_DAY = {
+    Terminus: 25,
+    Alexandria: 35,
+    Hilltop: 45,
+    Kingdom: 55,
+    Sanctuary: 60,
+    CommonWealth: 80
+  };
+  const oldBeginTravel = (typeof beginTravel==='function') ? beginTravel : null;
+  if(oldBeginTravel){
+    window.beginTravel = function patchedBeginTravel(dest,days){
+      const needDay = LEGENDARY_UNLOCK_DAY[dest];
+      if(needDay && S?.days<needDay){
+        const left = needDay-S.days;
+        showResult(
+          'Route Not Confirmed',
+          '📻',
+          [
+            'You only have rumors about <b>'+(LOCS[dest]?.n||dest)+'</b> right now.',
+            'Scout farther and survive <b>'+left+'</b> more day'+(left===1?'':'s')+' to verify a safe route.'
+          ],
+          'Understood',
+          'upAll()'
+        );
+        return;
+      }
+      oldBeginTravel(dest,days);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Replace arcade minigame with immersive "Perimeter Defense" operation
+  // ---------------------------------------------------------------------------
+  function runPerimeterDefense(){
+    const waves = rnd(2,4) + Math.min(2,Math.floor((S?.days||1)/50));
+    let kills = 0,injury = 0,supplies = 0,xp = 0;
+    const aliveRets = (S?.rets||[]).filter(r=>r.hp>0);
+    const groupPower = (atk?.()||0) + (def?.()||0) + aliveRets.reduce((n,r)=>n+r.a+r.def,0);
+
+    for(let w=1;w<=waves;w++){
+      const threat = rnd(14,26) + w*4 + Math.floor((S?.days||1)/20);
+      const swing = rnd(-6,10);
+      const score = groupPower + swing;
+      if(score>=threat){
+        const waveKills = rnd(3,8)+Math.floor(w/2);
+        kills += waveKills;
+        supplies += rnd(1,3);
+        xp += rnd(8,16);
+      }else{
+        const waveKills = rnd(1,4);
+        kills += waveKills;
+        const dmg = rnd(4,10);
+        injury += dmg;
+        xp += rnd(5,11);
+      }
+    }
+
+    if(typeof S!=='undefined'){
+      S.hp = Math.max(1, S.hp - injury);
+      S.gold += supplies;
+      S.xp += xp;
+      S.zombieKills = (S.zombieKills||0)+kills;
+      S.headshots = (S.headshots||0)+Math.floor(kills*0.35);
+      S.fame = (S.fame||0)+Math.floor(kills/8);
+    }
+    chkLU?.();
+    save?.();
+
+    const lines = [
+      '🧱 Held the perimeter for <b>'+waves+'</b> wave'+(waves===1?'':'s'),
+      '☠ Walkers put down: <b>'+kills+'</b>',
+      '❤ Injuries sustained: <b>'+injury+'</b>',
+      '📦 Supplies recovered: <b>'+supplies+'</b>',
+      '⭐ XP gained: <b>'+xp+'</b>'
+    ];
+    showResult('Perimeter Defense Complete','🧱',lines,'Continue','upAll()');
+  }
+
+  // Override the old tap-arcade minigame entry point.
+  window.startZombieGame = function patchedStartZombieGame(){
+    showResult(
+      'Perimeter Breach',
+      '🚧',
+      [
+        'A section of wall is collapsing under walker pressure.',
+        'You organize firing lanes, fallback points, and melee rotations.',
+        'This plays as a tactical defense operation (not an arcade tap minigame).'
+      ],
+      'Defend the perimeter',
+      'runPerimeterDefense()'
+    );
+  }
+  window.runPerimeterDefense = runPerimeterDefense;
+
+  // Update button label after each realm render to match the new mode.
+  const oldUpRealm = (typeof upRealm==='function') ? upRealm : null;
+  if(oldUpRealm){
+    window.upRealm = function patchedUpRealm(){
+      oldUpRealm();
+      const btns = Array.from(document.querySelectorAll('button.bt'));
+      const mg = btns.find(b=>b.textContent && b.textContent.includes('Zombie Defense'));
+      if(mg) mg.textContent='🧱 Perimeter Defense Operation';
+    }
+  }
+
 })();
